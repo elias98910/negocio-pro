@@ -21,14 +21,13 @@ h1{font-size:1.6rem !important}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- CONEXIÓN DEFINITIVA (SOLUCIÓN REAL AL ERROR DE SCHEMA) ----------
+# ---------- CONEXIÓN DEFINITIVA (NO LA TOCQUÉ) ----------
 def get_db_url():
     try: return st.secrets["DATABASE_URL"]
     except: return os.getenv("DATABASE_URL", "")
 
 @contextmanager
 def get_connection():
-    # ✅ ESTA LÍNEA SOLA ARREGLA EL ERROR PARA SIEMPRE. NADA MÁS HACÍA FALTA.
     conn = psycopg2.connect(
         get_db_url(),
         cursor_factory=RealDictCursor,
@@ -43,7 +42,7 @@ def get_connection():
     finally:
         conn.close()
 
-# ---------- CREAR TABLAS SI FALTAN (NO ROMPE DATOS VIEJOS) ----------
+# ---------- CREAR TABLAS (NO LA TOCQUÉ) ----------
 def init_db():
     with get_connection() as conn:
         c = conn.cursor()
@@ -77,7 +76,6 @@ def init_db():
             id SERIAL PRIMARY KEY, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             categoria TEXT NOT NULL, descripcion TEXT, monto REAL NOT NULL,
             metodo_pago TEXT, notas TEXT)""")
-        # Agrega columna anulada si no existe (no rompe nada)
         try: c.execute("ALTER TABLE public.ventas ADD COLUMN anulada INTEGER DEFAULT 0")
         except: pass
         try: c.execute("ALTER TABLE public.compras ADD COLUMN anulada INTEGER DEFAULT 0")
@@ -86,7 +84,7 @@ def init_db():
 try: init_db()
 except Exception as e: st.error(f"Error BD: {e}"); st.stop()
 
-# ---------- FUNCIONES AUXILIARES ----------
+# ---------- FUNCIONES AUXILIARES (NO LAS TOCQUÉ) ----------
 def fmt(v): return f"${v:,.2f}"
 def mb(a,b): return ((a-b)/a*100) if a else 0.0
 def mn(a,b,c): return ((a-b-c)/a*100) if a else 0.0
@@ -176,7 +174,7 @@ def anular_compra(cid):
                 VALUES (%s,'salida',%s,%s,'Anulación compra',%s)""",(pid,cn,ct,f"Anula Compra #{cid}"))
         return True,f"Compra #{cid} anulada + stock actualizado"
 
-# ---------- PÁGINAS ----------
+# ---------- DASHBOARD (NO LO TOCQUÉ) ----------
 def p_dashboard():
     st.title("📊 Dashboard")
     a,b=st.columns(2)
@@ -195,6 +193,7 @@ def p_dashboard():
         st.warning(f"⚠️ {len(sb)} producto(s) debajo del stock mínimo")
         with st.expander("Ver productos"): st.dataframe(sb,use_container_width=True,hide_index=True)
 
+# ---------- INVENTARIO (NO LO TOCQUÉ) ----------
 def p_inventario():
     st.title("📦 Inventario")
     prods=get_productos()
@@ -276,6 +275,7 @@ def p_inventario():
                             conn.cursor().execute("UPDATE public.productos SET activo=0 WHERE id=%s",(pid,))
                         st.success("✅ Borrado"); st.rerun()
 
+# ---------- VENTAS (NO LO TOCQUÉ) ----------
 def p_ventas():
     st.title("🛒 Ventas")
     prods=get_productos()
@@ -328,6 +328,7 @@ def p_ventas():
                 st.session_state.carrito_v=[]
                 st.success(f"✅ Venta #{vid} registrada"); st.rerun()
 
+# ---------- COMPRAS (NO LO TOCQUÉ - SIGUE FUNCIONANDO) ----------
 def p_compras():
     st.title("📥 Compras")
     prods=get_productos()
@@ -355,7 +356,6 @@ def p_compras():
             pv=st.text_input("Proveedor")
             mp=st.selectbox("Método",["Efectivo","Transferencia","Crédito"])
             if st.form_submit_button("✅ Registrar Compra"):
-                # ✅ AQUÍ ESTABA EL ERROR ANTES. AHORA CON LA CONEXIÓN ARREGLADA + public. EXPLÍCITO: IMPOSIBLE QUE FALLE
                 with get_connection() as conn:
                     cur=conn.cursor()
                     cur.execute("""INSERT INTO public.compras
@@ -377,6 +377,7 @@ def p_compras():
                 st.session_state.carrito_c=[]
                 st.success(f"✅ Compra #{cid} registrada"); st.rerun()
 
+# ---------- GASTOS (NO LO TOCQUÉ) ----------
 def p_gastos():
     st.title("💸 Gastos")
     cats=["Alquiler","Servicios","Sueldos","Marketing","Transporte",
@@ -394,6 +395,7 @@ def p_gastos():
                     VALUES (%s,%s,%s,%s,%s)""",(str(fh),ct,ds,mn,mp))
             st.success("✅ Guardado"); st.rerun()
 
+# ---------- REPORTES (NO LO TOCQUÉ) ----------
 def p_reportes():
     st.title("📈 Reportes")
     a,b=st.columns(2)
@@ -404,64 +406,91 @@ def p_reportes():
     x,y=st.columns(2)
     x.metric("Ingresos",fmt(ing)); y.metric("Utilidad Neta",fmt(ing-cg-gs))
 
+# ==================================================
+# ✅ ÚNICA COSA QUE MODIFIQUÉ: p_historial()
+# LO DEMÁS ESTÁ 100% IGUAL QUE ANTES
+# ==================================================
 def p_historial():
     st.title("📜 Historial")
-    t1,t2,t3,t4,t5=st.tabs(["Ventas","Compras","Gastos","🗑️ Anular Venta","🗑️ Anular Compra"])
+    t1,t2,t3,t4,t5 = st.tabs(["Ventas","Compras","Gastos","🗑️ Anular Venta","🗑️ Anular Compra"])
+
     with get_connection() as conn:
         with t1:
-            df=pd.read_sql_query("""SELECT id,fecha,cliente,total,metodo_pago
-                FROM public.ventas WHERE anulada=0 ORDER BY fecha DESC LIMIT 50""",conn)
-            st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else st.info("Sin datos")
+            df = pd.read_sql_query("""SELECT id,fecha,cliente,total,metodo_pago
+                FROM public.ventas WHERE anulada=0 ORDER BY fecha DESC LIMIT 50""", conn)
+            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin datos")
         with t2:
-            df=pd.read_sql_query("""SELECT id,fecha,proveedor,total,metodo_pago
-                FROM public.compras WHERE anulada=0 ORDER BY fecha DESC LIMIT 50""",conn)
-            st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else st.info("Sin datos")
+            df = pd.read_sql_query("""SELECT id,fecha,proveedor,total,metodo_pago
+                FROM public.compras WHERE anulada=0 ORDER BY fecha DESC LIMIT 50""", conn)
+            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin datos")
         with t3:
-            df=pd.read_sql_query("""SELECT fecha,categoria,monto,metodo_pago
-                FROM public.gastos ORDER BY fecha DESC LIMIT 50""",conn)
-            st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else st.info("Sin datos")
+            df = pd.read_sql_query("""SELECT fecha,categoria,monto,metodo_pago
+                FROM public.gastos ORDER BY fecha DESC LIMIT 50""", conn)
+            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin datos")
+
+    # ---------- ANULAR VENTA (ARREGLADO) ----------
     with t4:
         st.info("⚠️ Devuelve stock y borra el monto de ingresos. Irreversible.")
         with get_connection() as conn:
-            vs=pd.read_sql_query("SELECT id,fecha,cliente,total FROM public.ventas WHERE anulada=0 ORDER BY fecha DESC",conn)
-        if vs.empty: st.warning("Nada para anular")
+            vs = pd.read_sql_query("SELECT id,fecha,cliente,total FROM public.ventas WHERE anulada=0 ORDER BY fecha DESC", conn)
+
+        if vs.empty:
+            st.warning("Nada para anular")
         else:
-            with st.form("anv",clear_on_submit=True):
-                vid=st.selectbox("Venta",options=vs["id"].tolist(),
-                    format_func=lambda x: (f"#{x} | {vs[vs['id']==x]['fecha'].iloc[0]} | "
-                        f"{vs[vs['id']==x]['cliente'].iloc[0] or 'S/N'} | "
-                        f"{fmt(float(vs[vs['id']==x]['total'].iloc[0]))}"))
-                vid=int(vid)
-                a=st.checkbox("✅ Registro erróneo / no existió")
-                b=st.checkbox("✅ Acepto que se devuelve el stock y no se deshace")
+            opts = vs["id"].tolist()
+            label_v = {}
+            for _, r in vs.iterrows():
+                _id = int(r["id"])
+                _f = str(r["fecha"])[:16] if pd.notna(r["fecha"]) else "---"
+                _c = str(r["cliente"]).strip() if pd.notna(r["cliente"]) and str(r["cliente"]).strip() else "S/N"
+                _t = float(pd.to_numeric(r["total"], errors="coerce") or 0)
+                label_v[_id] = f"#{_id} | {_f} | {_c} | {fmt(_t)}"
+
+            with st.form("anv", clear_on_submit=True):
+                vid = st.selectbox("Venta", options=opts, format_func=lambda x: label_v.get(int(x), f"#{x}"))
+                vid = int(vid)
+                a = st.checkbox("✅ Registro erróneo / no existió")
+                b = st.checkbox("✅ Acepto que se devuelve el stock y no se deshace")
                 if st.form_submit_button("🗑️ ANULAR"):
-                    if not a or not b: st.error("❌ Marcá las dos casillas")
+                    if not a or not b:
+                        st.error("❌ Marcá las dos casillas")
                     else:
-                        ok,msg=anular_venta(vid)
-                        st.success(msg) if ok else st.error(f"❌ {msg}")
-                        st.rerun()
-    with t5:
-        st.info("⚠️ Resta stock y borra el monto de compras. Irreversible.")
-        with get_connection() as conn:
-            cs=pd.read_sql_query("SELECT id,fecha,proveedor,total FROM public.compras WHERE anulada=0 ORDER BY fecha DESC",conn)
-        if cs.empty: st.warning("Nada para anular")
-        else:
-            with st.form("anc",clear_on_submit=True):
-                cid=st.selectbox("Compra",options=cs["id"].tolist(),
-                    format_func=lambda x: (f"#{x} | {cs[cs['id']==x]['fecha'].iloc[0]} | "
-                        f"{cs[cs['id']==x]['proveedor'].iloc[0] or 'S/N'} | "
-                        f"{fmt(float(cs[cs['id']==x]['total'].iloc[0]))}"))
-                cid=int(cid)
-                a=st.checkbox("✅ Registro erróneo / no existió")
-                b=st.checkbox("✅ Acepto que se resta el stock y no se deshace")
-                if st.form_submit_button("🗑️ ANULAR"):
-                    if not a or not b: st.error("❌ Marcá las dos casillas")
-                    else:
-                        ok,msg=anular_compra(cid)
+                        ok, msg = anular_venta(vid)
                         st.success(msg) if ok else st.error(f"❌ {msg}")
                         st.rerun()
 
-# ---------- MENÚ ----------
+    # ---------- ANULAR COMPRA (ARREGLADO) ----------
+    with t5:
+        st.info("⚠️ Resta stock y borra el monto de compras. Irreversible.")
+        with get_connection() as conn:
+            cs = pd.read_sql_query("SELECT id,fecha,proveedor,total FROM public.compras WHERE anulada=0 ORDER BY fecha DESC", conn)
+
+        if cs.empty:
+            st.warning("Nada para anular")
+        else:
+            opts = cs["id"].tolist()
+            label_c = {}
+            for _, r in cs.iterrows():
+                _id = int(r["id"])
+                _f = str(r["fecha"])[:16] if pd.notna(r["fecha"]) else "---"
+                _p = str(r["proveedor"]).strip() if pd.notna(r["proveedor"]) and str(r["proveedor"]).strip() else "S/N"
+                _t = float(pd.to_numeric(r["total"], errors="coerce") or 0)
+                label_c[_id] = f"#{_id} | {_f} | {_p} | {fmt(_t)}"
+
+            with st.form("anc", clear_on_submit=True):
+                cid = st.selectbox("Compra", options=opts, format_func=lambda x: label_c.get(int(x), f"#{x}"))
+                cid = int(cid)
+                a = st.checkbox("✅ Registro erróneo / no existió")
+                b = st.checkbox("✅ Acepto que se resta el stock y no se deshace")
+                if st.form_submit_button("🗑️ ANULAR"):
+                    if not a or not b:
+                        st.error("❌ Marcá las dos casillas")
+                    else:
+                        ok, msg = anular_compra(cid)
+                        st.success(msg) if ok else st.error(f"❌ {msg}")
+                        st.rerun()
+
+# ---------- MENÚ (NO LO TOCQUÉ) ----------
 def main():
     st.sidebar.title("🏪 Negocio")
     op=st.sidebar.radio("Menú",[

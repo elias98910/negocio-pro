@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import os
 
 # ============================================================
-# CONFIGURACIÓN (ORIGINAL)
+# CONFIGURACIÓN
 # ============================================================
 st.set_page_config(
     page_title="Gestión de Negocio Pro",
@@ -37,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# CONEXIÓN A SUPABASE (ORIGINAL)
+# CONEXIÓN A SUPABASE (BLINDADA SCHEMA PUBLIC)
 # ============================================================
 def get_db_url():
     try:
@@ -49,6 +49,10 @@ def get_db_url():
 def get_connection():
     conn = psycopg2.connect(get_db_url(), cursor_factory=RealDictCursor)
     try:
+        cur = conn.cursor()
+        cur.execute("SET search_path TO public;")
+        cur.close()
+        conn.commit()
         yield conn
         conn.commit()
     except Exception:
@@ -61,8 +65,9 @@ def init_db():
     with get_connection() as conn:
         c = conn.cursor()
         
+        # Tablas originales
         c.execute("""
-            CREATE TABLE IF NOT EXISTS productos (
+            CREATE TABLE IF NOT EXISTS public.productos (
                 id SERIAL PRIMARY KEY,
                 codigo TEXT UNIQUE,
                 nombre TEXT NOT NULL,
@@ -79,9 +84,9 @@ def init_db():
         """)
         
         c.execute("""
-            CREATE TABLE IF NOT EXISTS movimientos_stock (
+            CREATE TABLE IF NOT EXISTS public.movimientos_stock (
                 id SERIAL PRIMARY KEY,
-                producto_id INTEGER NOT NULL REFERENCES productos(id),
+                producto_id INTEGER NOT NULL REFERENCES public.productos(id),
                 tipo TEXT NOT NULL,
                 cantidad REAL NOT NULL,
                 costo_unitario REAL,
@@ -92,7 +97,7 @@ def init_db():
         """)
         
         c.execute("""
-            CREATE TABLE IF NOT EXISTS ventas (
+            CREATE TABLE IF NOT EXISTS public.ventas (
                 id SERIAL PRIMARY KEY,
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 cliente TEXT,
@@ -104,10 +109,10 @@ def init_db():
         """)
         
         c.execute("""
-            CREATE TABLE IF NOT EXISTS venta_detalle (
+            CREATE TABLE IF NOT EXISTS public.venta_detalle (
                 id SERIAL PRIMARY KEY,
-                venta_id INTEGER NOT NULL REFERENCES ventas(id),
-                producto_id INTEGER NOT NULL REFERENCES productos(id),
+                venta_id INTEGER NOT NULL REFERENCES public.ventas(id),
+                producto_id INTEGER NOT NULL REFERENCES public.productos(id),
                 cantidad REAL NOT NULL,
                 precio_unitario REAL NOT NULL,
                 costo_unitario REAL NOT NULL,
@@ -116,7 +121,7 @@ def init_db():
         """)
         
         c.execute("""
-            CREATE TABLE IF NOT EXISTS compras (
+            CREATE TABLE IF NOT EXISTS public.compras (
                 id SERIAL PRIMARY KEY,
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 proveedor TEXT,
@@ -127,10 +132,10 @@ def init_db():
         """)
         
         c.execute("""
-            CREATE TABLE IF NOT EXISTS compra_detalle (
+            CREATE TABLE IF NOT EXISTS public.compra_detalle (
                 id SERIAL PRIMARY KEY,
-                compra_id INTEGER NOT NULL REFERENCES compras(id),
-                producto_id INTEGER NOT NULL REFERENCES productos(id),
+                compra_id INTEGER NOT NULL REFERENCES public.compras(id),
+                producto_id INTEGER NOT NULL REFERENCES public.productos(id),
                 cantidad REAL NOT NULL,
                 costo_unitario REAL NOT NULL,
                 subtotal REAL NOT NULL
@@ -138,7 +143,7 @@ def init_db():
         """)
         
         c.execute("""
-            CREATE TABLE IF NOT EXISTS gastos (
+            CREATE TABLE IF NOT EXISTS public.gastos (
                 id SERIAL PRIMARY KEY,
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 categoria TEXT NOT NULL,
@@ -148,6 +153,10 @@ def init_db():
                 notas TEXT
             )
         """)
+        
+        # ✅ NUEVO: Agregamos columna ANULADA (si no existe, no rompe nada)
+        c.execute("ALTER TABLE IF EXISTS public.ventas ADD COLUMN IF NOT EXISTS anulada INTEGER DEFAULT 0")
+        c.execute("ALTER TABLE IF EXISTS public.compras ADD COLUMN IF NOT EXISTS anulada INTEGER DEFAULT 0")
 
 try:
     init_db()
@@ -156,16 +165,16 @@ except Exception as e:
     st.stop()
 
 # ============================================================
-# FUNCIONES DE NEGOCIO (ORIGINAL)
+# FUNCIONES DE NEGOCIO (TODAS EXCLUYEN ANULADAS)
 # ============================================================
 def calcular_cogs_periodo(fecha_inicio, fecha_fin):
     with get_connection() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT COALESCE(SUM(vd.cantidad * vd.costo_unitario), 0) as cogs
-            FROM venta_detalle vd
-            JOIN ventas v ON vd.venta_id = v.id
-            WHERE DATE(v.fecha) BETWEEN %s AND %s
+            FROM public.venta_detalle vd
+            JOIN public.ventas v ON vd.venta_id = v.id
+            WHERE DATE(v.fecha) BETWEEN %s AND %s AND v.anulada = 0
         """, (fecha_inicio, fecha_fin))
         return float(c.fetchone()["cogs"])
 
@@ -174,8 +183,8 @@ def calcular_ingresos(fecha_inicio, fecha_fin):
         c = conn.cursor()
         c.execute("""
             SELECT COALESCE(SUM(total - descuento), 0) as ingresos
-            FROM ventas
-            WHERE DATE(fecha) BETWEEN %s AND %s
+            FROM public.ventas
+            WHERE DATE(fecha) BETWEEN %s AND %s AND anulada = 0
         """, (fecha_inicio, fecha_fin))
         return float(c.fetchone()["ingresos"])
 
@@ -184,7 +193,7 @@ def calcular_gastos(fecha_inicio, fecha_fin):
         c = conn.cursor()
         c.execute("""
             SELECT COALESCE(SUM(monto), 0) as total
-            FROM gastos
+            FROM public.gastos
             WHERE DATE(fecha) BETWEEN %s AND %s
         """, (fecha_inicio, fecha_fin))
         return float(c.fetchone()["total"])
@@ -194,15 +203,15 @@ def calcular_compras(fecha_inicio, fecha_fin):
         c = conn.cursor()
         c.execute("""
             SELECT COALESCE(SUM(total), 0) as total
-            FROM compras
-            WHERE DATE(fecha) BETWEEN %s AND %s
+            FROM public.compras
+            WHERE DATE(fecha) BETWEEN %s AND %s AND anulada = 0
         """, (fecha_inicio, fecha_fin))
         return float(c.fetchone()["total"])
 
 def valor_inventario():
     with get_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT COALESCE(SUM(stock * costo_unitario), 0) as valor FROM productos WHERE activo = 1")
+        c.execute("SELECT COALESCE(SUM(stock * costo_unitario), 0) as valor FROM public.productos WHERE activo = 1")
         return float(c.fetchone()["valor"])
 
 def margen_bruto(ingresos, cogs):
@@ -214,13 +223,12 @@ def margen_neto(ingresos, cogs, gastos):
 def formato_moneda(valor):
     return f"${valor:,.2f}"
 
-# ✅ FUNCION PRODUCTOS: SIN CACHÉ, TIPOS NATIVOS (SIN ERRORES)
 def get_productos_activos():
     with get_connection() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT id, codigo, nombre, stock, costo_unitario, precio_venta, categoria, unidad 
-            FROM productos 
+            FROM public.productos 
             WHERE activo = 1 
             ORDER BY nombre
         """)
@@ -245,8 +253,75 @@ def get_categorias_gastos():
     return ["Alquiler", "Servicios (luz/agua/gas)", "Sueldos", "Marketing", "Transporte", 
             "Impuestos", "Mantenimiento", "Seguros", "Papelería", "Otros"]
 
+# ✅ NUEVO: Funciones para ANULAR VENTA y COMPRA
+def anular_venta(venta_id):
+    with get_connection() as conn:
+        c = conn.cursor()
+        # 1. Buscamos el detalle de la venta
+        c.execute("""
+            SELECT vd.producto_id, vd.cantidad, vd.costo_unitario
+            FROM public.venta_detalle vd
+            WHERE vd.venta_id = %s
+        """, (venta_id,))
+        detalle = c.fetchall()
+        
+        if not detalle:
+            return False, "Venta no encontrada"
+        
+        # 2. Marcamos como anulada
+        c.execute("UPDATE public.ventas SET anulada = 1 WHERE id = %s", (venta_id,))
+        
+        # 3. Devolvemos stock a cada producto + registramos movimiento
+        for item in detalle:
+            pid = int(item["producto_id"])
+            cant = float(item["cantidad"])
+            costo = float(item["costo_unitario"]) if item["costo_unitario"] else 0.0
+            c.execute("UPDATE public.productos SET stock = stock + %s WHERE id = %s", (cant, pid))
+            c.execute("""
+                INSERT INTO public.movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
+                VALUES (%s, 'entrada', %s, %s, 'Anulación de venta', %s)
+            """, (pid, cant, costo, f"Anula Venta #{venta_id}"))
+        
+        return True, f"Venta #{venta_id} anulada correctamente. Stock devuelto."
+
+def anular_compra(compra_id):
+    with get_connection() as conn:
+        c = conn.cursor()
+        # 1. Buscamos detalle
+        c.execute("""
+            SELECT cd.producto_id, cd.cantidad, cd.costo_unitario, p.stock
+            FROM public.compra_detalle cd
+            JOIN public.productos p ON cd.producto_id = p.id
+            WHERE cd.compra_id = %s
+        """, (compra_id,))
+        detalle = c.fetchall()
+        
+        if not detalle:
+            return False, "Compra no encontrada"
+        
+        # 2. Validamos que no quede stock negativo
+        for item in detalle:
+            if float(item["stock"]) < float(item["cantidad"]):
+                return False, f"No se puede anular: el producto '{item['producto_id']}' tiene menos stock que el de la compra."
+        
+        # 3. Marcamos anulada
+        c.execute("UPDATE public.compras SET anulada = 1 WHERE id = %s", (compra_id,))
+        
+        # 4. Restamos stock + movimiento
+        for item in detalle:
+            pid = int(item["producto_id"])
+            cant = float(item["cantidad"])
+            costo = float(item["costo_unitario"]) if item["costo_unitario"] else 0.0
+            c.execute("UPDATE public.productos SET stock = stock - %s WHERE id = %s", (cant, pid))
+            c.execute("""
+                INSERT INTO public.movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
+                VALUES (%s, 'salida', %s, %s, 'Anulación de compra', %s)
+            """, (pid, cant, costo, f"Anula Compra #{compra_id}"))
+        
+        return True, f"Compra #{compra_id} anulada correctamente. Stock actualizado."
+
 # ============================================================
-# DASHBOARD (ORIGINAL)
+# DASHBOARD
 # ============================================================
 def pagina_dashboard():
     st.title("📊 Dashboard")
@@ -285,10 +360,11 @@ def pagina_dashboard():
     m2.metric("📦 Valor Inventario", formato_moneda(valor_inv))
     
     with get_connection() as conn:
-        stock_bajo = pd.read_sql_query(
-            "SELECT nombre, stock, stock_minimo, unidad FROM productos WHERE activo=1 AND stock <= stock_minimo AND stock_minimo > 0",
-            conn
-        )
+        stock_bajo = pd.read_sql_query("""
+            SELECT nombre, stock, stock_minimo, unidad 
+            FROM public.productos 
+            WHERE activo=1 AND stock <= stock_minimo AND stock_minimo > 0
+        """, conn)
     
     if not stock_bajo.empty:
         st.warning(f"⚠️ {len(stock_bajo)} producto(s) con stock bajo")
@@ -296,7 +372,7 @@ def pagina_dashboard():
             st.dataframe(stock_bajo, use_container_width=True, hide_index=True)
 
 # ============================================================
-# ✅ INVENTARIO DEFINITIVO (CORREGIDO fetchone()['id'])
+# INVENTARIO
 # ============================================================
 def pagina_inventario():
     st.title("📦 Inventario")
@@ -341,28 +417,26 @@ def pagina_inventario():
                     try:
                         with get_connection() as conn:
                             cur = conn.cursor()
-                            cur.execute("SELECT 1 FROM productos WHERE codigo = %s", (codigo,))
+                            cur.execute("SELECT 1 FROM public.productos WHERE codigo = %s", (codigo,))
                             if cur.fetchone():
                                 st.error(f"❌ Ya existe un producto con el código '{codigo}'")
                                 return
                             
-                            # ✅ CORRECCIÓN DEFINITIVA: ['id'] EN VEZ DE [0]
                             cur.execute("""
-                                INSERT INTO productos (codigo, nombre, categoria, stock, stock_minimo, costo_unitario, precio_venta, unidad)
+                                INSERT INTO public.productos (codigo, nombre, categoria, stock, stock_minimo, costo_unitario, precio_venta, unidad)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                             """, (codigo, nombre, categoria, stock_inicial, stock_min, costo, precio, unidad))
                             prod_id = int(cur.fetchone()['id'])
                             
                             if stock_inicial > 0:
                                 cur.execute("""
-                                    INSERT INTO movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
+                                    INSERT INTO public.movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                                     VALUES (%s, 'entrada', %s, %s, 'Stock inicial', 'ALTA')
                                 """, (prod_id, stock_inicial, costo))
                         
                         st.success(f"✅ Producto '{nombre}' creado (ID={prod_id})")
                         st.rerun()
                     except Exception as e:
-                        # ✅ Error DETALLADO para que nunca más veas "0"
                         st.error(f"❌ Error al guardar: {type(e).__name__}: {str(e)}")
     
     with tab3:
@@ -387,8 +461,8 @@ def pagina_inventario():
                         delta = cant if tipo=="entrada" else -cant
                         with get_connection() as conn:
                             cur = conn.cursor()
-                            cur.execute("UPDATE productos SET stock=stock+%s WHERE id=%s", (delta, pid))
-                            cur.execute("""INSERT INTO movimientos_stock 
+                            cur.execute("UPDATE public.productos SET stock=stock+%s WHERE id=%s", (delta, pid))
+                            cur.execute("""INSERT INTO public.movimientos_stock 
                                 (producto_id, tipo, cantidad, costo_unitario, motivo)
                                 VALUES (%s,%s,%s,%s,%s)""",
                                 (pid, tipo, cant, p["costo_unitario"], mot))
@@ -412,12 +486,12 @@ def pagina_inventario():
                         st.error("❌ Confirmá primero")
                     else:
                         with get_connection() as conn:
-                            conn.cursor().execute("UPDATE productos SET activo=0 WHERE id=%s", (pid,))
+                            conn.cursor().execute("UPDATE public.productos SET activo=0 WHERE id=%s", (pid,))
                         st.success("✅ Producto borrado")
                         st.rerun()
 
 # ============================================================
-# ✅ VENTAS (CORREGIDO fetchone()['id'])
+# VENTAS
 # ============================================================
 def pagina_ventas():
     st.title("🛒 Ventas")
@@ -463,19 +537,18 @@ def pagina_ventas():
             if st.form_submit_button("✅ Confirmar Venta"):
                 with get_connection() as conn:
                     cur = conn.cursor()
-                    # ✅ CORREGIDO
-                    cur.execute("""INSERT INTO ventas (cliente,total,descuento,metodo_pago)
+                    cur.execute("""INSERT INTO public.ventas (cliente,total,descuento,metodo_pago)
                         VALUES (%s,%s,%s,%s) RETURNING id""", (cli,total,desc,met))
                     vid = int(cur.fetchone()['id'])
                     
                     for it in st.session_state.carrito:
                         iid = int(it["producto_id"])
-                        cur.execute("""INSERT INTO venta_detalle
+                        cur.execute("""INSERT INTO public.venta_detalle
                             (venta_id,producto_id,cantidad,precio_unitario,costo_unitario,subtotal)
                             VALUES (%s,%s,%s,%s,%s,%s)""",
                             (vid,iid,it["cantidad"],it["precio"],it["costo"],it["subtotal"]))
-                        cur.execute("UPDATE productos SET stock=stock-%s WHERE id=%s", (it["cantidad"],iid))
-                        cur.execute("""INSERT INTO movimientos_stock
+                        cur.execute("UPDATE public.productos SET stock=stock-%s WHERE id=%s", (it["cantidad"],iid))
+                        cur.execute("""INSERT INTO public.movimientos_stock
                             (producto_id,tipo,cantidad,costo_unitario,motivo,referencia)
                             VALUES (%s,'salida',%s,%s,'Venta',%s)""",
                             (iid,it["cantidad"],it["costo"],f"Venta #{vid}"))
@@ -485,7 +558,7 @@ def pagina_ventas():
                 st.rerun()
 
 # ============================================================
-# ✅ COMPRAS (CORREGIDO fetchone()['id'])
+# COMPRAS
 # ============================================================
 def pagina_compras():
     st.title("📥 Compras")
@@ -523,20 +596,19 @@ def pagina_compras():
             if st.form_submit_button("✅ Registrar Compra"):
                 with get_connection() as conn:
                     cur = conn.cursor()
-                    # ✅ CORREGIDO
-                    cur.execute("INSERT INTO compras (proveedor,total,metodo_pago) VALUES (%s,%s,%s) RETURNING id",
+                    cur.execute("INSERT INTO public.compras (proveedor,total,metodo_pago) VALUES (%s,%s,%s) RETURNING id",
                         (prov,total,met))
                     cid = int(cur.fetchone()['id'])
                     
                     for it in st.session_state.carrito_compra:
                         iid = int(it["producto_id"])
-                        cur.execute("""INSERT INTO compra_detalle
+                        cur.execute("""INSERT INTO public.compra_detalle
                             (compra_id,producto_id,cantidad,costo_unitario,subtotal)
                             VALUES (%s,%s,%s,%s,%s)""",
                             (cid,iid,it["cantidad"],it["costo"],it["subtotal"]))
-                        cur.execute("UPDATE productos SET stock=stock+%s, costo_unitario=%s WHERE id=%s",
+                        cur.execute("UPDATE public.productos SET stock=stock+%s, costo_unitario=%s WHERE id=%s",
                             (it["cantidad"],it["costo"],iid))
-                        cur.execute("""INSERT INTO movimientos_stock
+                        cur.execute("""INSERT INTO public.movimientos_stock
                             (producto_id,tipo,cantidad,costo_unitario,motivo,referencia)
                             VALUES (%s,'entrada',%s,%s,'Compra',%s)""",
                             (iid,it["cantidad"],it["costo"],f"Compra #{cid}"))
@@ -546,7 +618,7 @@ def pagina_compras():
                 st.rerun()
 
 # ============================================================
-# GASTOS | REPORTES | HISTORIAL | MAIN (100% ORIGINALES)
+# GASTOS | REPORTES
 # ============================================================
 def pagina_gastos():
     st.title("💸 Gastos")
@@ -559,7 +631,7 @@ def pagina_gastos():
         if st.form_submit_button("💾 Guardar"):
             with get_connection() as conn:
                 conn.cursor().execute("""
-                    INSERT INTO gastos (fecha,categoria,descripcion,monto,metodo_pago)
+                    INSERT INTO public.gastos (fecha,categoria,descripcion,monto,metodo_pago)
                     VALUES (%s,%s,%s,%s,%s)""", (fecha,cat,desc,mon,met))
             st.success("✅ Gasto guardado"); st.rerun()
 
@@ -576,23 +648,141 @@ def pagina_reportes():
     r1.metric("Ingresos", formato_moneda(ing))
     r2.metric("Utilidad Neta", formato_moneda(ing-cg-gs))
 
+# ============================================================
+# HISTORIAL + ✅ NUEVO: ANULAR VENTA / ANULAR COMPRA
+# ============================================================
 def pagina_historial():
     st.title("📜 Historial")
-    t1,t2,t3 = st.tabs(["Ventas","Compras","Gastos"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Ventas", "Compras", "Gastos", 
+        "🗑️ Anular Venta", "🗑️ Anular Compra"
+    ])
+    
     with get_connection() as conn:
-        with t1:
-            df = pd.read_sql_query("SELECT fecha,cliente,total,metodo_pago FROM ventas ORDER BY fecha DESC LIMIT 30", conn)
-            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin ventas")
-        with t2:
-            df = pd.read_sql_query("SELECT fecha,proveedor,total FROM compras ORDER BY fecha DESC LIMIT 30", conn)
-            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin compras")
-        with t3:
-            df = pd.read_sql_query("SELECT fecha,categoria,monto FROM gastos ORDER BY fecha DESC LIMIT 30", conn)
-            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin gastos")
+        # TAB 1: Ventas ACTIVAS
+        with tab1:
+            df = pd.read_sql_query("""
+                SELECT id, fecha, cliente, total, metodo_pago 
+                FROM public.ventas 
+                WHERE anulada = 0 
+                ORDER BY fecha DESC LIMIT 50
+            """, conn)
+            if df.empty:
+                st.info("Sin ventas")
+            else:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # TAB 2: Compras ACTIVAS
+        with tab2:
+            df = pd.read_sql_query("""
+                SELECT id, fecha, proveedor, total, metodo_pago 
+                FROM public.compras 
+                WHERE anulada = 0 
+                ORDER BY fecha DESC LIMIT 50
+            """, conn)
+            if df.empty:
+                st.info("Sin compras")
+            else:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # TAB 3: Gastos
+        with tab3:
+            df = pd.read_sql_query("""
+                SELECT fecha, categoria, monto, metodo_pago 
+                FROM public.gastos 
+                ORDER BY fecha DESC LIMIT 50
+            """, conn)
+            if df.empty:
+                st.info("Sin gastos")
+            else:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    # ✅ TAB 4: ANULAR VENTA
+    with tab4:
+        st.info("⚠️ Anular una venta devuelve el stock a los productos y borra el monto de tus ingresos. No se puede deshacer.")
+        with get_connection() as conn:
+            ventas = pd.read_sql_query("""
+                SELECT id, fecha, cliente, total, metodo_pago
+                FROM public.ventas
+                WHERE anulada = 0
+                ORDER BY fecha DESC
+            """, conn)
+        
+        if ventas.empty:
+            st.warning("No hay ventas para anular")
+        else:
+            with st.form("anular_venta", clear_on_submit=True):
+                vid = st.selectbox(
+                    "Seleccioná la venta a anular",
+                    options=ventas["id"].tolist(),
+                    format_func=lambda x: (
+                        f"#{x} | "
+                        f"{ventas[ventas['id']==x]['fecha'].values[0]} | "
+                        f"Cliente: {ventas[ventas['id']==x]['cliente'].values[0] or 'Sin nombre'} | "
+                        f"Total: {formato_moneda(float(ventas[ventas['id']==x]['total'].values[0]))}"
+                    )
+                )
+                vid = int(vid)
+                conf1 = st.checkbox("✅ Estoy seguro/a que esta venta NO existió o se cargó mal")
+                conf2 = st.checkbox("✅ Entiendo que el stock se devolverá automáticamente y no se puede deshacer")
+                
+                if st.form_submit_button("🗑️ ANULAR ESTA VENTA"):
+                    if not conf1 or not conf2:
+                        st.error("❌ Tenés que marcar LAS DOS casillas de confirmación")
+                    else:
+                        ok, msg = anular_venta(vid)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg}")
+    
+    # ✅ TAB 5: ANULAR COMPRA
+    with tab5:
+        st.info("⚠️ Anular una compra resta el stock de los productos y borra el monto de tus compras. No se puede deshacer.")
+        with get_connection() as conn:
+            compras = pd.read_sql_query("""
+                SELECT id, fecha, proveedor, total, metodo_pago
+                FROM public.compras
+                WHERE anulada = 0
+                ORDER BY fecha DESC
+            """, conn)
+        
+        if compras.empty:
+            st.warning("No hay compras para anular")
+        else:
+            with st.form("anular_compra", clear_on_submit=True):
+                cid = st.selectbox(
+                    "Seleccioná la compra a anular",
+                    options=compras["id"].tolist(),
+                    format_func=lambda x: (
+                        f"#{x} | "
+                        f"{compras[compras['id']==x]['fecha'].values[0]} | "
+                        f"Proveedor: {compras[compras['id']==x]['proveedor'].values[0] or 'Sin nombre'} | "
+                        f"Total: {formato_moneda(float(compras[compras['id']==x]['total'].values[0]))}"
+                    )
+                )
+                cid = int(cid)
+                conf1 = st.checkbox("✅ Estoy seguro/a que esta compra NO existió o se cargó mal")
+                conf2 = st.checkbox("✅ Entiendo que se restará el stock y no se puede deshacer")
+                
+                if st.form_submit_button("🗑️ ANULAR ESTA COMPRA"):
+                    if not conf1 or not conf2:
+                        st.error("❌ Tenés que marcar LAS DOS casillas de confirmación")
+                    else:
+                        ok, msg = anular_compra(cid)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg}")
 
+# ============================================================
+# MAIN
+# ============================================================
 def main():
     st.sidebar.title("🏪 Negocio Pro")
-    st.sidebar.caption("Versión definitiva")
+    st.sidebar.caption("Versión definitiva + anular ventas/compras")
     p = st.sidebar.radio("Menú", [
         "📊 Dashboard","📦 Inventario","🛒 Ventas",
         "📥 Compras","💸 Gastos","📈 Reportes","📜 Historial"

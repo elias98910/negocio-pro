@@ -1,4 +1,4 @@
-import streamlit as st
+       import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -214,7 +214,7 @@ def margen_neto(ingresos, cogs, gastos):
 def formato_moneda(valor):
     return f"${valor:,.2f}"
 
-# ✅ ARREGLO 1: Agregado caché corto para NO mostrar productos viejos
+# ✅ ARREGLO 1: Caché corto para no mostrar productos viejos
 @st.cache_data(ttl=5)
 def get_productos_activos():
     with get_connection() as conn:
@@ -277,10 +277,11 @@ def pagina_dashboard():
         with st.expander("Ver productos"):
             st.dataframe(stock_bajo, use_container_width=True, hide_index=True)
 
-# ✅ ARREGLO 2: FUNCIÓN DE INVENTARIO COMPLETAMENTE CORREGIDA (NADA MÁS TOCADO)
+# ✅ ARREGLO 2 + NUEVO: INVENTARIO CON BORRAR (4TA PESTAÑA)
 def pagina_inventario():
     st.title("📦 Inventario")
-    tab1, tab2, tab3 = st.tabs(["📋 Lista", "➕ Nuevo", "🔄 Ajuste"])
+    # ➕ AGREGUÉ LA PESTAÑA NUEVA: 🗑️ Borrar
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Lista", "➕ Nuevo", "🔄 Ajuste", "🗑️ Borrar"])
     
     with tab1:
         df = get_productos_activos()
@@ -291,7 +292,7 @@ def pagina_inventario():
                          use_container_width=True, hide_index=True)
     
     with tab2:
-        # ⭐ ERROR PRINCIPAL ARREGLADO: clear_on_submit=True limpia campos SOLOS
+        # ⭐ Error principal arreglado: limpia campos solos
         with st.form("nuevo_producto", clear_on_submit=True):
             codigo = st.text_input("Código / SKU *", placeholder="Ej: PROD001")
             nombre = st.text_input("Nombre *", placeholder="Ej: Coca Cola 1L")
@@ -326,7 +327,7 @@ def pagina_inventario():
                     try:
                         with get_connection() as conn:
                             c = conn.cursor()
-                            # ✅ ARREGLO 3: Evita error silencioso de código repetido
+                            # ✅ Arreglo 3: evita código repetido
                             c.execute("SELECT id FROM productos WHERE codigo = %s", (codigo,))
                             if c.fetchone():
                                 st.error(f"❌ Ya existe un producto con el código '{codigo}'. Usá otro.")
@@ -345,7 +346,7 @@ def pagina_inventario():
                                 """, (prod_id, stock_inicial, costo))
                         
                         st.success(f"✅ Producto '{nombre}' creado correctamente")
-                        get_productos_activos.clear()  # Actualiza la lista al instante
+                        get_productos_activos.clear()
                         st.rerun()
                         
                     except Exception as e:
@@ -380,8 +381,41 @@ def pagina_inventario():
         else:
             st.info("Primero creá productos para poder ajustar stock")
 
+    # ➕➖➗ NUEVA PESTAÑA COMPLETA: BORRAR PRODUCTO
+    with tab4:
+        df = get_productos_activos()
+        if df.empty:
+            st.warning("No hay productos para borrar.")
+        else:
+            st.info("ℹ️ El producto desaparecerá de todas las listas, pero se mantendrá tu historial de ventas/compras (no se pierden datos).")
+            
+            with st.form("borrar_producto", clear_on_submit=True):
+                prod_id = st.selectbox(
+                    "Seleccioná el producto a borrar",
+                    options=df["id"].tolist(),
+                    format_func=lambda x: f"Cód: {df[df['id']==x]['codigo'].values[0]} | {df[df['id']==x]['nombre'].values[0]} | Stock: {df[df['id']==x]['stock'].values[0]}"
+                )
+                confirmar = st.checkbox("✅ Estoy seguro/a, quiero borrar este producto definitivamente de las listas")
+                
+                if st.form_submit_button("🗑️ BORRAR PRODUCTO"):
+                    if not confirmar:
+                        st.error("❌ Primero tenés que marcar la casilla de confirmación para borrar")
+                    else:
+                        try:
+                            with get_connection() as conn:
+                                c = conn.cursor()
+                                # Lo marcamos inactivo (no lo borramos físico para no romper historiales)
+                                c.execute("UPDATE productos SET activo = 0 WHERE id = %s", (prod_id,))
+                            
+                            st.success("✅ Producto borrado correctamente. Ya no aparecerá en ninguna lista.")
+                            get_productos_activos.clear()  # Actualizamos la lista al instante
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error al borrar: {str(e)}")
+
 # ============================================================
-# RESTO DE FUNCIONES 100% IGUALES AL ORIGINAL (SIN TOCAR)
+# RESTO DEL CÓDIGO 100% IGUAL AL ORIGINAL (SIN TOCAR NADA)
 # ============================================================
 def pagina_ventas():
     st.title("🛒 Ventas")

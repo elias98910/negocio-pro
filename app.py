@@ -182,19 +182,23 @@ def pagina_inventario():
         else:
             st.dataframe(df[["codigo", "nombre", "stock", "costo_unitario", "precio_venta"]], use_container_width=True, hide_index=True)
     
-    with tab2:
+        with tab2:
         st.subheader("Crear nuevo producto")
-        codigo = st.text_input("Código / SKU *", key="np_codigo")
-        nombre = st.text_input("Nombre del producto *", key="np_nombre")
-        categoria = st.text_input("Categoría", key="np_categoria")
-        unidad = st.selectbox("Unidad", ["unidad", "kg", "litro", "caja", "paquete"], key="np_unidad")
-        stock_inicial = st.number_input("Stock inicial", min_value=0.0, value=0.0, step=1.0, key="np_stock")
-        costo = st.number_input("Costo unitario *", min_value=0.0, value=0.0, step=0.01, key="np_costo")
-        precio = st.number_input("Precio de venta *", min_value=0.0, value=0.0, step=0.01, key="np_precio")
-        stock_min = st.number_input("Stock mínimo", min_value=0.0, value=5.0, step=1.0, key="np_min")
         
-        if st.button("➕ Crear producto", key="btn_crear"):
-            if not codigo.strip() or not nombre.strip():
+        with st.form("form_nuevo_producto", clear_on_submit=True):
+            codigo = st.text_input("Código / SKU *")
+            nombre = st.text_input("Nombre del producto *")
+            categoria = st.text_input("Categoría")
+            unidad = st.selectbox("Unidad", ["unidad", "kg", "litro", "caja", "paquete"])
+            stock_inicial = st.number_input("Stock inicial", min_value=0.0, value=0.0, step=1.0)
+            costo = st.number_input("Costo unitario *", min_value=0.0, value=0.0, step=0.01)
+            precio = st.number_input("Precio de venta *", min_value=0.0, value=0.0, step=0.01)
+            stock_min = st.number_input("Stock mínimo", min_value=0.0, value=5.0, step=1.0)
+            
+            enviar = st.form_submit_button("➕ Crear producto")
+        
+        if enviar:
+            if not codigo or not codigo.strip() or not nombre or not nombre.strip():
                 st.error("Código y Nombre son obligatorios")
             elif costo <= 0 or precio <= 0:
                 st.error("Costo y Precio deben ser mayores a 0")
@@ -205,21 +209,35 @@ def pagina_inventario():
                         c = conn.cursor()
                         c.execute("SELECT 1 FROM productos WHERE codigo = %s", (codigo.strip(),))
                         if c.fetchone():
-                            st.error(f"Ya existe un producto con el código '{codigo}'")
+                            st.error(f"Ya existe un producto con el código '{codigo.strip()}'")
                         else:
                             c.execute("""
-                                INSERT INTO productos (codigo, nombre, categoria, stock, stock_minimo, costo_unitario, precio_venta, unidad)
+                                INSERT INTO productos 
+                                (codigo, nombre, categoria, stock, stock_minimo, costo_unitario, precio_venta, unidad)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                            """, (codigo.strip(), nombre.strip(), categoria.strip(), stock_inicial, stock_min, costo, precio, unidad))
+                            """, (
+                                codigo.strip(), 
+                                nombre.strip(), 
+                                categoria.strip() if categoria else "", 
+                                stock_inicial, 
+                                stock_min, 
+                                costo, 
+                                precio, 
+                                unidad
+                            ))
                             prod_id = c.fetchone()["id"]
+                            
                             if stock_inicial > 0:
                                 c.execute("""
-                                    INSERT INTO movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
+                                    INSERT INTO movimientos_stock 
+                                    (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                                     VALUES (%s, 'entrada', %s, %s, 'Stock inicial', 'ALTA')
                                 """, (prod_id, stock_inicial, costo))
+                    
                     if prod_id:
-                        st.success(f"✅ Producto '{nombre}' creado correctamente (ID: {prod_id})")
+                        st.success(f"✅ Producto '{nombre.strip()}' creado correctamente")
                         st.rerun()
+                        
                 except Exception as e:
                     st.error(f"Error: {e}")
     

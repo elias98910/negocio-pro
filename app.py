@@ -182,7 +182,7 @@ def pagina_inventario():
         else:
             st.dataframe(df[["codigo", "nombre", "stock", "costo_unitario", "precio_venta"]], use_container_width=True, hide_index=True)
     
-        with tab2:
+    with tab2:
         st.subheader("Crear nuevo producto")
         
         with st.form("form_nuevo_producto", clear_on_submit=True):

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import os
 
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN (ORIGINAL)
 # ============================================================
 st.set_page_config(
     page_title="Gestión de Negocio Pro",
@@ -37,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# CONEXIÓN A SUPABASE
+# CONEXIÓN A SUPABASE (ORIGINAL)
 # ============================================================
 def get_db_url():
     try:
@@ -156,7 +156,7 @@ except Exception as e:
     st.stop()
 
 # ============================================================
-# FUNCIONES DE NEGOCIO
+# FUNCIONES DE NEGOCIO (ORIGINAL + ARREGLO DEFINITIVO PRODUCTOS)
 # ============================================================
 def calcular_cogs_periodo(fecha_inicio, fecha_fin):
     with get_connection() as conn:
@@ -214,16 +214,38 @@ def margen_neto(ingresos, cogs, gastos):
 def formato_moneda(valor):
     return f"${valor:,.2f}"
 
-@st.cache_data(ttl=5)
+# ============================================================
+# ✅ FUNCION DEFINITIVA DE PRODUCTOS (SIN CACHÉ, SIN ERRORES DE TIPO)
+# Carga directamente con psycopg2: IDs SIEMPRE son enteros de Python
+# ============================================================
 def get_productos_activos():
     with get_connection() as conn:
-        df = pd.read_sql_query(
-            "SELECT id, codigo, nombre, stock, costo_unitario, precio_venta, categoria, unidad FROM productos WHERE activo = 1 ORDER BY nombre",
-            conn
-        )
-        # ✅ ARREGLO CLAVE: Forzamos que la columna ID sea NÚMERO ENTERO (nunca texto)
-        df["id"] = df["id"].astype(int)
-        return df
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, codigo, nombre, stock, costo_unitario, precio_venta, categoria, unidad 
+            FROM productos 
+            WHERE activo = 1 
+            ORDER BY nombre
+        """)
+        filas = c.fetchall()
+        # Convertimos a lista de dicts con tipos nativos (ID = int garantizado)
+        productos = []
+        for f in filas:
+            productos.append({
+                "id": int(f["id"]),
+                "codigo": str(f["codigo"]) if f["codigo"] else "",
+                "nombre": str(f["nombre"]) if f["nombre"] else "",
+                "stock": float(f["stock"]) if f["stock"] else 0.0,
+                "costo_unitario": float(f["costo_unitario"]) if f["costo_unitario"] else 0.0,
+                "precio_venta": float(f["precio_venta"]) if f["precio_venta"] else 0.0,
+                "categoria": str(f["categoria"]) if f["categoria"] else "",
+                "unidad": str(f["unidad"]) if f["unidad"] else "unidad"
+            })
+        return productos
+
+# Función auxiliar para mostrar listas en tablas
+def productos_a_df(productos):
+    return pd.DataFrame(productos)
 
 def get_categorias_gastos():
     return ["Alquiler", "Servicios (luz/agua/gas)", "Sueldos", "Marketing", "Transporte", 
@@ -279,17 +301,24 @@ def pagina_dashboard():
         with st.expander("Ver productos"):
             st.dataframe(stock_bajo, use_container_width=True, hide_index=True)
 
+# ============================================================
+# ✅ INVENTARIO DEFINITIVO (TODOS LOS ERRORES ARREGLADOS)
+# ============================================================
 def pagina_inventario():
     st.title("📦 Inventario")
+    productos = get_productos_activos()
     tab1, tab2, tab3, tab4 = st.tabs(["📋 Lista", "➕ Nuevo", "🔄 Ajuste", "🗑️ Borrar"])
     
     with tab1:
-        df = get_productos_activos()
-        if df.empty:
+        if not productos:
             st.warning("No hay productos. Crea uno en la pestaña Nuevo.")
         else:
-            st.dataframe(df[["codigo", "nombre", "stock", "costo_unitario", "precio_venta"]], 
-                         use_container_width=True, hide_index=True)
+            df = productos_a_df(productos)
+            st.dataframe(
+                df[["codigo", "nombre", "stock", "costo_unitario", "precio_venta"]], 
+                use_container_width=True, 
+                hide_index=True
+            )
     
     with tab2:
         with st.form("nuevo_producto", clear_on_submit=True):
@@ -326,18 +355,20 @@ def pagina_inventario():
                     try:
                         with get_connection() as conn:
                             c = conn.cursor()
-                            c.execute("SELECT id FROM productos WHERE codigo = %s", (codigo,))
+                            # Validar código único
+                            c.execute("SELECT 1 FROM productos WHERE codigo = %s", (codigo,))
                             if c.fetchone():
                                 st.error(f"❌ Ya existe un producto con el código '{codigo}'. Usá otro.")
                                 return
                             
-                            # ✅ ARREGLO CLAVE: Leemos ID por POSICIÓN [0] y forzamos INT (nunca más error 'id')
+                            # Insertar (leemos ID por posición = int garantizado)
                             c.execute("""
                                 INSERT INTO productos (codigo, nombre, categoria, stock, stock_minimo, costo_unitario, precio_venta, unidad)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                             """, (codigo, nombre, categoria, stock_inicial, stock_min, costo, precio, unidad))
                             prod_id = int(c.fetchone()[0])
                             
+                            # Movimiento stock inicial
                             if stock_inicial > 0:
                                 c.execute("""
                                     INSERT INTO movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
@@ -345,63 +376,57 @@ def pagina_inventario():
                                 """, (prod_id, stock_inicial, costo))
                         
                         st.success(f"✅ Producto '{nombre}' creado correctamente")
-                        get_productos_activos.clear()
                         st.rerun()
                         
                     except Exception as e:
                         st.error(f"❌ Error al guardar: {str(e)}")
     
     with tab3:
-        df = get_productos_activos()
-        if not df.empty:
+        if not productos:
+            st.info("Primero creá productos para poder ajustar stock")
+        else:
+            ids_productos = [p["id"] for p in productos]
             with st.form("ajuste", clear_on_submit=True):
-                # ✅ ARREGLO: Opciones SIEMPRE enteros
-                opciones_id = [int(x) for x in df["id"].tolist()]
                 prod_id = st.selectbox(
                     "Producto",
-                    options=opciones_id,
-                    format_func=lambda x: f"{df[df['id']==int(x)]['nombre'].values[0]} | Stock: {df[df['id']==int(x)]['stock'].values[0]}"
+                    options=ids_productos,
+                    format_func=lambda x: next((f"{p['nombre']} | Stock: {p['stock']}" for p in productos if p["id"] == x), "")
                 )
-                prod_id = int(prod_id)  # ✅ Doble seguridad
+                prod_id = int(prod_id)
+                p_actual = next((p for p in productos if p["id"] == prod_id), None)
                 tipo = st.radio("Tipo", ["entrada", "salida"], horizontal=True)
                 cantidad = st.number_input("Cantidad", min_value=0.01, value=1.0, step=0.1)
                 motivo = st.selectbox("Motivo", ["Inventario físico", "Pérdida / Merma", "Otro"])
+                
                 if st.form_submit_button("Aplicar ajuste"):
-                    with get_connection() as conn:
-                        c = conn.cursor()
-                        c.execute("SELECT stock, costo_unitario FROM productos WHERE id=%s", (prod_id,))
-                        p = c.fetchone()
-                        if tipo == "salida" and cantidad > p["stock"]:
-                            st.error("❌ Stock insuficiente")
-                        else:
-                            delta = cantidad if tipo == "entrada" else -cantidad
+                    if tipo == "salida" and cantidad > p_actual["stock"]:
+                        st.error("❌ Stock insuficiente")
+                    else:
+                        delta = cantidad if tipo == "entrada" else -cantidad
+                        with get_connection() as conn:
+                            c = conn.cursor()
                             c.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", (delta, prod_id))
                             c.execute("""
                                 INSERT INTO movimientos_stock (producto_id, tipo, cantidad, costo_unitario, motivo)
                                 VALUES (%s, %s, %s, %s, %s)
-                            """, (prod_id, tipo, cantidad, p["costo_unitario"], motivo))
-                    st.success("✅ Ajuste realizado")
-                    get_productos_activos.clear()
-                    st.rerun()
-        else:
-            st.info("Primero creá productos para poder ajustar stock")
+                            """, (prod_id, tipo, cantidad, p_actual["costo_unitario"], motivo))
+                        st.success("✅ Ajuste realizado")
+                        st.rerun()
 
     with tab4:
-        df = get_productos_activos()
-        if df.empty:
+        if not productos:
             st.warning("No hay productos para borrar.")
         else:
             st.info("ℹ️ El producto desaparecerá de todas las listas, pero se mantendrá tu historial de ventas/compras.")
+            ids_productos = [p["id"] for p in productos]
             
             with st.form("borrar_producto", clear_on_submit=True):
-                # ✅ ARREGLO CLAVE: Opciones SIEMPRE números enteros
-                opciones_id = [int(x) for x in df["id"].tolist()]
                 prod_id = st.selectbox(
                     "Seleccioná el producto a borrar",
-                    options=opciones_id,
-                    format_func=lambda x: f"Cód: {df[df['id']==int(x)]['codigo'].values[0]} | {df[df['id']==int(x)]['nombre'].values[0]} | Stock: {df[df['id']==int(x)]['stock'].values[0]}"
+                    options=ids_productos,
+                    format_func=lambda x: next((f"Cód: {p['codigo']} | {p['nombre']} | Stock: {p['stock']}" for p in productos if p["id"] == x), "")
                 )
-                prod_id = int(prod_id)  # ✅ FORZAMOS ENTERO: NUNCA MÁS ERROR 'id'
+                prod_id = int(prod_id)
                 confirmar = st.checkbox("✅ Estoy seguro/a, quiero borrar este producto")
                 
                 if st.form_submit_button("🗑️ BORRAR PRODUCTO"):
@@ -412,33 +437,33 @@ def pagina_inventario():
                             with get_connection() as conn:
                                 c = conn.cursor()
                                 c.execute("UPDATE productos SET activo = 0 WHERE id = %s", (prod_id,))
-                            
                             st.success("✅ Producto borrado correctamente")
-                            get_productos_activos.clear()
                             st.rerun()
-                            
                         except Exception as e:
                             st.error(f"❌ Error al borrar: {str(e)}")
 
+# ============================================================
+# VENTAS (ARREGLADA PARA USAR TIPOS NATIVOS)
+# ============================================================
 def pagina_ventas():
     st.title("🛒 Ventas")
-    df_prod = get_productos_activos()
-    if df_prod.empty:
+    productos = get_productos_activos()
+    if not productos:
         st.warning("Primero crea productos")
         return
     
     if "carrito" not in st.session_state:
         st.session_state.carrito = []
     
+    ids_productos = [p["id"] for p in productos]
     with st.form("add_item", clear_on_submit=True):
-        opciones_id = [int(x) for x in df_prod["id"].tolist()]
         prod_id = st.selectbox(
             "Producto",
-            options=opciones_id,
-            format_func=lambda x: f"{df_prod[df_prod['id']==int(x)]['nombre'].values[0]} | Stock: {df_prod[df_prod['id']==int(x)]['stock'].values[0]}"
+            options=ids_productos,
+            format_func=lambda x: next((f"{p['nombre']} | Stock: {p['stock']}" for p in productos if p["id"] == x), "")
         )
         prod_id = int(prod_id)
-        p_row = df_prod[df_prod["id"] == prod_id].iloc[0]
+        p_row = next((p for p in productos if p["id"] == prod_id), None)
         cantidad = st.number_input("Cantidad", min_value=0.01, value=1.0)
         precio = st.number_input("Precio", value=float(p_row["precio_venta"]), min_value=0.0)
         
@@ -493,34 +518,37 @@ def pagina_ventas():
                 
                 st.session_state.carrito = []
                 st.success(f"Venta #{venta_id} registrada")
-                get_productos_activos.clear()
                 st.rerun()
 
+# ============================================================
+# COMPRAS (ARREGLADA PARA USAR TIPOS NATIVOS)
+# ============================================================
 def pagina_compras():
     st.title("📥 Compras")
-    df_prod = get_productos_activos()
-    if df_prod.empty:
+    productos = get_productos_activos()
+    if not productos:
         st.warning("Primero crea productos")
         return
     
     if "carrito_compra" not in st.session_state:
         st.session_state.carrito_compra = []
     
+    ids_productos = [p["id"] for p in productos]
     with st.form("add_compra", clear_on_submit=True):
-        opciones_id = [int(x) for x in df_prod["id"].tolist()]
         prod_id = st.selectbox(
             "Producto",
-            options=opciones_id,
-            format_func=lambda x: df_prod[df_prod["id"]==int(x)]["nombre"].values[0]
+            options=ids_productos,
+            format_func=lambda x: next((p["nombre"] for p in productos if p["id"] == x), "")
         )
         prod_id = int(prod_id)
+        p_row = next((p for p in productos if p["id"] == prod_id), None)
         cantidad = st.number_input("Cantidad", min_value=0.01, value=1.0)
-        costo = st.number_input("Costo unitario", min_value=0.0, value=0.0, step=0.01)
+        costo = st.number_input("Costo unitario", min_value=0.0, value=float(p_row["costo_unitario"]), step=0.01)
+        
         if st.form_submit_button("➕ Agregar"):
-            p_name = df_prod[df_prod["id"]==prod_id]["nombre"].values[0]
             st.session_state.carrito_compra.append({
                 "producto_id": prod_id,
-                "nombre": p_name,
+                "nombre": p_row["nombre"],
                 "cantidad": cantidad,
                 "costo": costo,
                 "subtotal": cantidad * costo
@@ -556,9 +584,11 @@ def pagina_compras():
                         """, (item_id, item["cantidad"], item["costo"], f"Compra #{compra_id}"))
                 st.session_state.carrito_compra = []
                 st.success("Compra registrada")
-                get_productos_activos.clear()
                 st.rerun()
 
+# ============================================================
+# RESTO DE PÁGINAS (100% ORIGINALES, SIN MODIFICACIONES)
+# ============================================================
 def pagina_gastos():
     st.title("💸 Gastos")
     with st.form("nuevo_gasto"):
@@ -610,7 +640,7 @@ def pagina_historial():
             st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("Sin gastos")
 
 # ============================================================
-# MAIN
+# MAIN (ORIGINAL)
 # ============================================================
 def main():
     st.sidebar.title("🏪 Negocio Pro")

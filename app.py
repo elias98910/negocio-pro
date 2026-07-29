@@ -714,39 +714,47 @@ def pagina_historial():
         if ventas.empty:
             st.warning("No hay ventas para anular")
         else:
-            opciones_ventas = [int(x) for x in ventas["id"].tolist()]
-            venta_id = st.selectbox(
-                "Venta",
-                options=opciones_ventas,
-                format_func=lambda x: f"#{x} — {money(float(ventas.loc[ventas['id']==x, 'total'].values[0]))}"
-            )
-            venta_id = to_int(venta_id)
-            
-            if st.checkbox("Confirmo anular esta venta"):
-                if st.button("Anular Venta", type="primary"):
-                    try:
-                        with db() as conn:
-                            cur = conn.cursor()
-                            cur.execute(
-                                "SELECT producto_id, cantidad, costo_unitario FROM venta_detalle WHERE venta_id = %s",
-                                (venta_id,)
-                            )
-                            items = cur.fetchall()
-                            cur.execute("UPDATE ventas SET anulada = 1 WHERE id = %s", (venta_id,))
-                            for it in items:
+            opciones_ventas = []
+            for x in ventas["id"].tolist():
+                val = to_int(x)
+                if val > 0:
+                    opciones_ventas.append(val)
+
+            if not opciones_ventas:
+                st.warning("No hay ventas válidas para anular")
+            else:
+                venta_id = st.selectbox(
+                    "Venta",
+                    options=opciones_ventas,
+                    format_func=lambda x: f"#{x} — {money(float(ventas.loc[ventas['id']==x, 'total'].values[0]))}"
+                )
+                venta_id = to_int(venta_id)
+                
+                if st.checkbox("Confirmo anular esta venta"):
+                    if st.button("Anular Venta", type="primary"):
+                        try:
+                            with db() as conn:
+                                cur = conn.cursor()
                                 cur.execute(
-                                    "UPDATE productos SET stock = stock + %s WHERE id = %s",
-                                    (it["cantidad"], it["producto_id"])
+                                    "SELECT producto_id, cantidad, costo_unitario FROM venta_detalle WHERE venta_id = %s",
+                                    (venta_id,)
                                 )
-                                cur.execute("""
-                                    INSERT INTO movimientos_stock
-                                    (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
-                                    VALUES (%s, 'entrada', %s, %s, 'Anulación venta', %s)
-                                """, (it["producto_id"], it["cantidad"], it["costo_unitario"], f"Anul Venta #{venta_id}"))
-                        st.success("Venta anulada y stock devuelto")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
+                                items = cur.fetchall()
+                                cur.execute("UPDATE ventas SET anulada = 1 WHERE id = %s", (venta_id,))
+                                for it in items:
+                                    cur.execute(
+                                        "UPDATE productos SET stock = stock + %s WHERE id = %s",
+                                        (it["cantidad"], it["producto_id"])
+                                    )
+                                    cur.execute("""
+                                        INSERT INTO movimientos_stock
+                                        (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
+                                        VALUES (%s, 'entrada', %s, %s, 'Anulación venta', %s)
+                                    """, (it["producto_id"], it["cantidad"], it["costo_unitario"], f"Anul Venta #{venta_id}"))
+                            st.success("Venta anulada y stock devuelto")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
 
     with t5:
         st.info("Al anular una compra se descuenta el stock.")
@@ -758,47 +766,55 @@ def pagina_historial():
         if compras.empty:
             st.warning("No hay compras para anular")
         else:
-            opciones_compras = [int(x) for x in compras["id"].tolist()]
-            compra_id = st.selectbox(
-                "Compra",
-                options=opciones_compras,
-                format_func=lambda x: f"#{x} — {money(float(compras.loc[compras['id']==x, 'total'].values[0]))}"
-            )
-            compra_id = to_int(compra_id)
-            
-            if st.checkbox("Confirmo anular esta compra"):
-                if st.button("Anular Compra", type="primary"):
-                    try:
-                        with db() as conn:
-                            cur = conn.cursor()
-                            cur.execute(
-                                "SELECT producto_id, cantidad, costo_unitario FROM compra_detalle WHERE compra_id = %s",
-                                (compra_id,)
-                            )
-                            items = cur.fetchall()
+            opciones_compras = []
+            for x in compras["id"].tolist():
+                val = to_int(x)
+                if val > 0:
+                    opciones_compras.append(val)
 
-                            for it in items:
-                                cur.execute("SELECT stock FROM productos WHERE id = %s", (it["producto_id"],))
-                                stock_actual = to_float(cur.fetchone()["stock"])
-                                if stock_actual < to_float(it["cantidad"]):
-                                    st.error("No se puede anular: stock insuficiente")
-                                    return
-
-                            cur.execute("UPDATE compras SET anulada = 1 WHERE id = %s", (compra_id,))
-                            for it in items:
+            if not opciones_compras:
+                st.warning("No hay compras válidas para anular")
+            else:
+                compra_id = st.selectbox(
+                    "Compra",
+                    options=opciones_compras,
+                    format_func=lambda x: f"#{x} — {money(float(compras.loc[compras['id']==x, 'total'].values[0]))}"
+                )
+                compra_id = to_int(compra_id)
+                
+                if st.checkbox("Confirmo anular esta compra"):
+                    if st.button("Anular Compra", type="primary"):
+                        try:
+                            with db() as conn:
+                                cur = conn.cursor()
                                 cur.execute(
-                                    "UPDATE productos SET stock = stock - %s WHERE id = %s",
-                                    (it["cantidad"], it["producto_id"])
+                                    "SELECT producto_id, cantidad, costo_unitario FROM compra_detalle WHERE compra_id = %s",
+                                    (compra_id,)
                                 )
-                                cur.execute("""
-                                    INSERT INTO movimientos_stock
-                                    (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
-                                    VALUES (%s, 'salida', %s, %s, 'Anulación compra', %s)
-                                """, (it["producto_id"], it["cantidad"], it["costo_unitario"], f"Anul Compra #{compra_id}"))
-                        st.success("Compra anulada y stock actualizado")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
+                                items = cur.fetchall()
+
+                                for it in items:
+                                    cur.execute("SELECT stock FROM productos WHERE id = %s", (it["producto_id"],))
+                                    stock_actual = to_float(cur.fetchone()["stock"])
+                                    if stock_actual < to_float(it["cantidad"]):
+                                        st.error("No se puede anular: stock insuficiente")
+                                        return
+
+                                cur.execute("UPDATE compras SET anulada = 1 WHERE id = %s", (compra_id,))
+                                for it in items:
+                                    cur.execute(
+                                        "UPDATE productos SET stock = stock - %s WHERE id = %s",
+                                        (it["cantidad"], it["producto_id"])
+                                    )
+                                    cur.execute("""
+                                        INSERT INTO movimientos_stock
+                                        (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
+                                        VALUES (%s, 'salida', %s, %s, 'Anulación compra', %s)
+                                    """, (it["producto_id"], it["cantidad"], it["costo_unitario"], f"Anul Compra #{compra_id}"))
+                            st.success("Compra anulada y stock actualizado")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
 
 # ============================================================
 # MAIN

@@ -675,50 +675,69 @@ def pagina_historial():
 
     with db() as conn:
         with t1:
-            df = pd.read_sql_query(
-                "SELECT id, fecha, cliente, total, descuento, metodo_pago FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
-                conn
-            )
-            if df.empty:
-                st.info("Sin ventas")
-            else:
-                st.dataframe(df, use_container_width=True, hide_index=True)
+            try:
+                df = pd.read_sql_query(
+                    "SELECT id, fecha, cliente, total, descuento, metodo_pago FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
+                    conn
+                )
+                if df.empty:
+                    st.info("Sin ventas")
+                else:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"Error cargando ventas: {e}")
 
         with t2:
-            df = pd.read_sql_query(
-                "SELECT id, fecha, proveedor, total, metodo_pago FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
-                conn
-            )
-            if df.empty:
-                st.info("Sin compras")
-            else:
-                st.dataframe(df, use_container_width=True, hide_index=True)
+            try:
+                df = pd.read_sql_query(
+                    "SELECT id, fecha, proveedor, total, metodo_pago FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
+                    conn
+                )
+                if df.empty:
+                    st.info("Sin compras")
+                else:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"Error cargando compras: {e}")
 
         with t3:
-            df = pd.read_sql_query(
-                "SELECT fecha, categoria, descripcion, monto FROM gastos ORDER BY fecha DESC LIMIT 40",
-                conn
-            )
-            if df.empty:
-                st.info("Sin gastos")
-            else:
-                st.dataframe(df, use_container_width=True, hide_index=True)
+            try:
+                df = pd.read_sql_query(
+                    "SELECT fecha, categoria, descripcion, monto FROM gastos ORDER BY fecha DESC LIMIT 40",
+                    conn
+                )
+                if df.empty:
+                    st.info("Sin gastos")
+                else:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"Error cargando gastos: {e}")
 
     with t4:
         st.info("Al anular una venta se devuelve el stock.")
-        with db() as conn:
-            ventas = pd.read_sql_query(
-                "SELECT id, fecha, total FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 25",
-                conn
-            )
+        try:
+            with db() as conn:
+                ventas = pd.read_sql_query(
+                    "SELECT id, fecha, total FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 25",
+                    conn
+                )
+        except Exception as e:
+            st.error(f"Error: {e}")
+            ventas = pd.DataFrame()
+
         if ventas.empty:
             st.warning("No hay ventas para anular")
         else:
             opciones_ventas = []
-            for x in ventas["id"].tolist():
-                val = to_int(x)
-                if val > 0:
-                    opciones_ventas.append(val)
+            labels_ventas = {}
+            for _, row in ventas.iterrows():
+                vid = to_int(row["id"])
+                if vid > 0:
+                    opciones_ventas.append(vid)
+                    try:
+                        labels_ventas[vid] = f"#{vid} — {money(to_float(row['total']))}"
+                    except:
+                        labels_ventas[vid] = f"#{vid}"
 
             if not opciones_ventas:
                 st.warning("No hay ventas válidas para anular")
@@ -726,10 +745,10 @@ def pagina_historial():
                 venta_id = st.selectbox(
                     "Venta",
                     options=opciones_ventas,
-                    format_func=lambda x: f"#{x} — {money(float(ventas.loc[ventas['id']==x, 'total'].values[0]))}"
+                    format_func=lambda x: labels_ventas.get(x, f"#{x}")
                 )
                 venta_id = to_int(venta_id)
-                
+
                 if st.checkbox("Confirmo anular esta venta"):
                     if st.button("Anular Venta", type="primary"):
                         try:
@@ -758,19 +777,29 @@ def pagina_historial():
 
     with t5:
         st.info("Al anular una compra se descuenta el stock.")
-        with db() as conn:
-            compras = pd.read_sql_query(
-                "SELECT id, fecha, total FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 25",
-                conn
-            )
+        try:
+            with db() as conn:
+                compras = pd.read_sql_query(
+                    "SELECT id, fecha, total FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 25",
+                    conn
+                )
+        except Exception as e:
+            st.error(f"Error: {e}")
+            compras = pd.DataFrame()
+
         if compras.empty:
             st.warning("No hay compras para anular")
         else:
             opciones_compras = []
-            for x in compras["id"].tolist():
-                val = to_int(x)
-                if val > 0:
-                    opciones_compras.append(val)
+            labels_compras = {}
+            for _, row in compras.iterrows():
+                cid = to_int(row["id"])
+                if cid > 0:
+                    opciones_compras.append(cid)
+                    try:
+                        labels_compras[cid] = f"#{cid} — {money(to_float(row['total']))}"
+                    except:
+                        labels_compras[cid] = f"#{cid}"
 
             if not opciones_compras:
                 st.warning("No hay compras válidas para anular")
@@ -778,10 +807,10 @@ def pagina_historial():
                 compra_id = st.selectbox(
                     "Compra",
                     options=opciones_compras,
-                    format_func=lambda x: f"#{x} — {money(float(compras.loc[compras['id']==x, 'total'].values[0]))}"
+                    format_func=lambda x: labels_compras.get(x, f"#{x}")
                 )
                 compra_id = to_int(compra_id)
-                
+
                 if st.checkbox("Confirmo anular esta compra"):
                     if st.button("Anular Compra", type="primary"):
                         try:

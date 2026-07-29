@@ -249,21 +249,21 @@ def pagina_resumen():
     fi, ff = str(desde), str(hasta)
 
     ingresos = calcular(
-        "SELECT COALESCE(SUM(total - descuento),0) AS v FROM ventas WHERE DATE(fecha) BETWEEN %s AND %s AND anulada = 0",
+        "SELECT COALESCE(SUM(total - descuento),0) AS v FROM ventas WHERE DATE(fecha) BETWEEN %s AND %s AND COALESCE(anulada, 0) = 0",
         (fi, ff)
     )
     cogs = calcular("""
         SELECT COALESCE(SUM(vd.cantidad * vd.costo_unitario),0) AS v
         FROM venta_detalle vd
         JOIN ventas v ON vd.venta_id = v.id
-        WHERE DATE(v.fecha) BETWEEN %s AND %s AND v.anulada = 0
+        WHERE DATE(v.fecha) BETWEEN %s AND %s AND COALESCE(v.anulada, 0) = 0
     """, (fi, ff))
     gastos = calcular(
         "SELECT COALESCE(SUM(monto),0) AS v FROM gastos WHERE DATE(fecha) BETWEEN %s AND %s",
         (fi, ff)
     )
     compras = calcular(
-        "SELECT COALESCE(SUM(total),0) AS v FROM compras WHERE DATE(fecha) BETWEEN %s AND %s AND anulada = 0",
+        "SELECT COALESCE(SUM(total),0) AS v FROM compras WHERE DATE(fecha) BETWEEN %s AND %s AND COALESCE(anulada, 0) = 0",
         (fi, ff)
     )
     valor_stock = calcular(
@@ -648,13 +648,13 @@ def pagina_reportes():
     fi, ff = str(desde), str(hasta)
 
     ingresos = calcular(
-        "SELECT COALESCE(SUM(total - descuento),0) AS v FROM ventas WHERE DATE(fecha) BETWEEN %s AND %s AND anulada = 0",
+        "SELECT COALESCE(SUM(total - descuento),0) AS v FROM ventas WHERE DATE(fecha) BETWEEN %s AND %s AND COALESCE(anulada, 0) = 0",
         (fi, ff)
     )
     cogs = calcular("""
         SELECT COALESCE(SUM(vd.cantidad * vd.costo_unitario),0) AS v
         FROM venta_detalle vd JOIN ventas v ON vd.venta_id = v.id
-        WHERE DATE(v.fecha) BETWEEN %s AND %s AND v.anulada = 0
+        WHERE DATE(v.fecha) BETWEEN %s AND %s AND COALESCE(v.anulada, 0) = 0
     """, (fi, ff))
     gastos = calcular(
         "SELECT COALESCE(SUM(monto),0) AS v FROM gastos WHERE DATE(fecha) BETWEEN %s AND %s",
@@ -677,7 +677,7 @@ def pagina_historial():
         with t1:
             try:
                 df = pd.read_sql_query(
-                    "SELECT id, fecha, cliente, total, descuento, metodo_pago FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
+                    "SELECT id, fecha, cliente, total, descuento, metodo_pago FROM ventas WHERE COALESCE(anulada, 0) = 0 ORDER BY fecha DESC LIMIT 40",
                     conn
                 )
                 if df.empty:
@@ -690,7 +690,7 @@ def pagina_historial():
         with t2:
             try:
                 df = pd.read_sql_query(
-                    "SELECT id, fecha, proveedor, total, metodo_pago FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
+                    "SELECT id, fecha, proveedor, total, metodo_pago FROM compras WHERE COALESCE(anulada, 0) = 0 ORDER BY fecha DESC LIMIT 40",
                     conn
                 )
                 if df.empty:
@@ -718,7 +718,7 @@ def pagina_historial():
         try:
             with db() as conn:
                 ventas = pd.read_sql_query(
-                    "SELECT id, fecha, total FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 25",
+                    "SELECT id, fecha, total FROM ventas WHERE COALESCE(anulada, 0) = 0 ORDER BY fecha DESC LIMIT 25",
                     conn
                 )
         except Exception as e:
@@ -780,7 +780,7 @@ def pagina_historial():
         try:
             with db() as conn:
                 compras = pd.read_sql_query(
-                    "SELECT id, fecha, total FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 25",
+                    "SELECT id, fecha, total FROM compras WHERE COALESCE(anulada, 0) = 0 ORDER BY fecha DESC LIMIT 25",
                     conn
                 )
         except Exception as e:

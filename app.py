@@ -103,28 +103,30 @@ def db():
 def init_tables():
     with db() as conn:
         cur = conn.cursor()
+        # Usamos los nombres de columnas que YA existen en tu base
         cur.execute("""
             CREATE TABLE IF NOT EXISTS productos (
                 id SERIAL PRIMARY KEY,
-                codigo TEXT UNIQUE NOT NULL,
+                codigo TEXT UNIQUE,
                 nombre TEXT NOT NULL,
+                descripcion TEXT DEFAULT '',
                 categoria TEXT DEFAULT '',
                 stock REAL DEFAULT 0,
                 stock_minimo REAL DEFAULT 0,
-                costo REAL DEFAULT 0,
-                precio REAL DEFAULT 0,
+                costo_unitario REAL DEFAULT 0,
+                precio_venta REAL DEFAULT 0,
                 unidad TEXT DEFAULT 'unidad',
                 activo INTEGER DEFAULT 1,
-                creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS movimientos (
+            CREATE TABLE IF NOT EXISTS movimientos_stock (
                 id SERIAL PRIMARY KEY,
                 producto_id INTEGER REFERENCES productos(id),
                 tipo TEXT NOT NULL,
                 cantidad REAL NOT NULL,
-                costo REAL DEFAULT 0,
+                costo_unitario REAL DEFAULT 0,
                 motivo TEXT DEFAULT '',
                 referencia TEXT DEFAULT '',
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -137,18 +139,18 @@ def init_tables():
                 cliente TEXT DEFAULT '',
                 total REAL NOT NULL,
                 descuento REAL DEFAULT 0,
-                metodo TEXT DEFAULT '',
+                metodo_pago TEXT DEFAULT '',
                 anulada INTEGER DEFAULT 0
             )
         """)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS venta_items (
+            CREATE TABLE IF NOT EXISTS venta_detalle (
                 id SERIAL PRIMARY KEY,
                 venta_id INTEGER REFERENCES ventas(id),
                 producto_id INTEGER REFERENCES productos(id),
                 cantidad REAL NOT NULL,
-                precio REAL NOT NULL,
-                costo REAL NOT NULL,
+                precio_unitario REAL NOT NULL,
+                costo_unitario REAL NOT NULL,
                 subtotal REAL NOT NULL
             )
         """)
@@ -158,17 +160,17 @@ def init_tables():
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 proveedor TEXT DEFAULT '',
                 total REAL NOT NULL,
-                metodo TEXT DEFAULT '',
+                metodo_pago TEXT DEFAULT '',
                 anulada INTEGER DEFAULT 0
             )
         """)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS compra_items (
+            CREATE TABLE IF NOT EXISTS compra_detalle (
                 id SERIAL PRIMARY KEY,
                 compra_id INTEGER REFERENCES compras(id),
                 producto_id INTEGER REFERENCES productos(id),
                 cantidad REAL NOT NULL,
-                costo REAL NOT NULL,
+                costo_unitario REAL NOT NULL,
                 subtotal REAL NOT NULL
             )
         """)
@@ -179,7 +181,7 @@ def init_tables():
                 categoria TEXT NOT NULL,
                 descripcion TEXT DEFAULT '',
                 monto REAL NOT NULL,
-                metodo TEXT DEFAULT ''
+                metodo_pago TEXT DEFAULT ''
             )
         """)
 
@@ -196,7 +198,8 @@ def listar_productos():
     with db() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, codigo, nombre, stock, costo, precio, categoria, unidad, stock_minimo
+            SELECT id, codigo, nombre, stock, costo_unitario, precio_venta,
+                   categoria, unidad, stock_minimo
             FROM productos
             WHERE activo = 1
             ORDER BY nombre
@@ -207,34 +210,33 @@ def listar_productos():
             "codigo": to_str(r["codigo"]),
             "nombre": to_str(r["nombre"]),
             "stock": to_float(r["stock"]),
-            "costo": to_float(r["costo"]),
-            "precio": to_float(r["precio"]),
+            "costo": to_float(r["costo_unitario"]),
+            "precio": to_float(r["precio_venta"]),
             "categoria": to_str(r["categoria"]),
             "unidad": to_str(r["unidad"]) or "unidad",
             "stock_minimo": to_float(r["stock_minimo"])
         } for r in rows]
 
-def calcular(sql, params):
+def calcular(sql, params=None):
     with db() as conn:
         cur = conn.cursor()
-        cur.execute(sql, params)
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
         row = cur.fetchone()
         return to_float(row["v"]) if row else 0.0
 
 # ============================================================
-# ESTADO DE SESIÓN
+# ESTADO
 # ============================================================
 if "carrito_venta" not in st.session_state:
     st.session_state.carrito_venta = []
 if "carrito_compra" not in st.session_state:
     st.session_state.carrito_compra = []
-if "nonce_venta" not in st.session_state:
-    st.session_state.nonce_venta = str(uuid.uuid4())
-if "nonce_compra" not in st.session_state:
-    st.session_state.nonce_compra = str(uuid.uuid4())
 
 # ============================================================
-# PÁGINA: RESUMEN
+# RESUMEN
 # ============================================================
 def pagina_resumen():
     st.title("📊 Resumen")
@@ -252,9 +254,9 @@ def pagina_resumen():
         (fi, ff)
     )
     cogs = calcular("""
-        SELECT COALESCE(SUM(vi.cantidad * vi.costo),0) AS v
-        FROM venta_items vi
-        JOIN ventas v ON vi.venta_id = v.id
+        SELECT COALESCE(SUM(vd.cantidad * vd.costo_unitario),0) AS v
+        FROM venta_detalle vd
+        JOIN ventas v ON vd.venta_id = v.id
         WHERE DATE(v.fecha) BETWEEN %s AND %s AND v.anulada = 0
     """, (fi, ff))
     gastos = calcular(
@@ -266,8 +268,7 @@ def pagina_resumen():
         (fi, ff)
     )
     valor_stock = calcular(
-        "SELECT COALESCE(SUM(stock * costo),0) AS v FROM productos WHERE activo = 1",
-        ()
+        "SELECT COALESCE(SUM(stock * costo_unitario),0) AS v FROM productos WHERE activo = 1"
     )
 
     utilidad_bruta = ingresos - cogs
@@ -288,7 +289,6 @@ def pagina_resumen():
     e.metric("Compras del período", money(compras))
     f.metric("Valor del inventario", money(valor_stock))
 
-    # Stock bajo
     with db() as conn:
         bajo = pd.read_sql_query(
             "SELECT nombre, stock, stock_minimo FROM productos WHERE activo = 1 AND stock <= stock_minimo AND stock_minimo > 0 ORDER BY stock",
@@ -300,7 +300,7 @@ def pagina_resumen():
             st.dataframe(bajo, use_container_width=True, hide_index=True)
 
 # ============================================================
-# PÁGINA: INVENTARIO
+# INVENTARIO
 # ============================================================
 def pagina_inventario():
     st.title("📦 Inventario")
@@ -309,7 +309,6 @@ def pagina_inventario():
 
     productos = listar_productos()
 
-    # ----- LISTA -----
     with tab1:
         if not productos:
             st.info("Todavía no hay productos.")
@@ -321,7 +320,6 @@ def pagina_inventario():
                 hide_index=True
             )
 
-    # ----- NUEVO PRODUCTO (sin placeholders) -----
     with tab2:
         st.subheader("Cargar producto nuevo")
 
@@ -357,7 +355,7 @@ def pagina_inventario():
                         else:
                             cur.execute("""
                                 INSERT INTO productos
-                                (codigo, nombre, categoria, stock, stock_minimo, costo, precio, unidad)
+                                (codigo, nombre, categoria, stock, stock_minimo, costo_unitario, precio_venta, unidad)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                                 RETURNING id
                             """, (codigo, nombre, categoria, stock_inicial, stock_minimo, costo, precio, unidad))
@@ -365,8 +363,8 @@ def pagina_inventario():
 
                             if stock_inicial > 0:
                                 cur.execute("""
-                                    INSERT INTO movimientos
-                                    (producto_id, tipo, cantidad, costo, motivo, referencia)
+                                    INSERT INTO movimientos_stock
+                                    (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                                     VALUES (%s, 'entrada', %s, %s, 'Stock inicial', 'ALTA')
                                 """, (nuevo_id, stock_inicial, costo))
 
@@ -376,7 +374,6 @@ def pagina_inventario():
                 except Exception as e:
                     st.error(f"Error al guardar: {e}")
 
-    # ----- AJUSTE -----
     with tab3:
         if not productos:
             st.info("Primero cargá productos.")
@@ -398,10 +395,10 @@ def pagina_inventario():
                 try:
                     with db() as conn:
                         cur = conn.cursor()
-                        cur.execute("SELECT stock, costo FROM productos WHERE id = %s", (prod_id,))
+                        cur.execute("SELECT stock, costo_unitario FROM productos WHERE id = %s", (prod_id,))
                         p = cur.fetchone()
                         stock_actual = to_float(p["stock"])
-                        costo_actual = to_float(p["costo"])
+                        costo_actual = to_float(p["costo_unitario"])
 
                         if tipo == "salida" and cantidad > stock_actual:
                             st.error("No hay suficiente stock.")
@@ -409,8 +406,8 @@ def pagina_inventario():
                             delta = cantidad if tipo == "entrada" else -cantidad
                             cur.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", (delta, prod_id))
                             cur.execute("""
-                                INSERT INTO movimientos
-                                (producto_id, tipo, cantidad, costo, motivo)
+                                INSERT INTO movimientos_stock
+                                (producto_id, tipo, cantidad, costo_unitario, motivo)
                                 VALUES (%s, %s, %s, %s, %s)
                             """, (prod_id, tipo, cantidad, costo_actual, motivo))
                     st.success("Ajuste realizado.")
@@ -418,7 +415,6 @@ def pagina_inventario():
                 except Exception as e:
                     st.error(str(e))
 
-    # ----- ELIMINAR -----
     with tab4:
         if not productos:
             st.info("No hay productos.")
@@ -441,7 +437,7 @@ def pagina_inventario():
                     st.rerun()
 
 # ============================================================
-# PÁGINA: VENTAS
+# VENTAS
 # ============================================================
 def pagina_ventas():
     st.title("🛒 Ventas")
@@ -501,15 +497,15 @@ def pagina_ventas():
                 with db() as conn:
                     cur = conn.cursor()
                     cur.execute("""
-                        INSERT INTO ventas (cliente, total, descuento, metodo)
+                        INSERT INTO ventas (cliente, total, descuento, metodo_pago)
                         VALUES (%s, %s, %s, %s) RETURNING id
                     """, (to_str(cliente), total, descuento, metodo))
                     venta_id = to_int(cur.fetchone()["id"])
 
                     for item in st.session_state.carrito_venta:
                         cur.execute("""
-                            INSERT INTO venta_items
-                            (venta_id, producto_id, cantidad, precio, costo, subtotal)
+                            INSERT INTO venta_detalle
+                            (venta_id, producto_id, cantidad, precio_unitario, costo_unitario, subtotal)
                             VALUES (%s, %s, %s, %s, %s, %s)
                         """, (venta_id, item["producto_id"], item["cantidad"], item["precio"], item["costo"], item["subtotal"]))
                         cur.execute(
@@ -517,8 +513,8 @@ def pagina_ventas():
                             (item["cantidad"], item["producto_id"])
                         )
                         cur.execute("""
-                            INSERT INTO movimientos
-                            (producto_id, tipo, cantidad, costo, motivo, referencia)
+                            INSERT INTO movimientos_stock
+                            (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                             VALUES (%s, 'salida', %s, %s, 'Venta', %s)
                         """, (item["producto_id"], item["cantidad"], item["costo"], f"Venta #{venta_id}"))
 
@@ -529,7 +525,7 @@ def pagina_ventas():
                 st.error(str(e))
 
 # ============================================================
-# PÁGINA: COMPRAS
+# COMPRAS
 # ============================================================
 def pagina_compras():
     st.title("📥 Compras")
@@ -579,25 +575,25 @@ def pagina_compras():
                 with db() as conn:
                     cur = conn.cursor()
                     cur.execute("""
-                        INSERT INTO compras (proveedor, total, metodo)
+                        INSERT INTO compras (proveedor, total, metodo_pago)
                         VALUES (%s, %s, %s) RETURNING id
                     """, (to_str(proveedor), total, metodo))
                     compra_id = to_int(cur.fetchone()["id"])
 
                     for item in st.session_state.carrito_compra:
                         cur.execute("""
-                            INSERT INTO compra_items
-                            (compra_id, producto_id, cantidad, costo, subtotal)
+                            INSERT INTO compra_detalle
+                            (compra_id, producto_id, cantidad, costo_unitario, subtotal)
                             VALUES (%s, %s, %s, %s, %s)
                         """, (compra_id, item["producto_id"], item["cantidad"], item["costo"], item["subtotal"]))
                         cur.execute("""
                             UPDATE productos
-                            SET stock = stock + %s, costo = %s
+                            SET stock = stock + %s, costo_unitario = %s
                             WHERE id = %s
                         """, (item["cantidad"], item["costo"], item["producto_id"]))
                         cur.execute("""
-                            INSERT INTO movimientos
-                            (producto_id, tipo, cantidad, costo, motivo, referencia)
+                            INSERT INTO movimientos_stock
+                            (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                             VALUES (%s, 'entrada', %s, %s, 'Compra', %s)
                         """, (item["producto_id"], item["cantidad"], item["costo"], f"Compra #{compra_id}"))
 
@@ -608,7 +604,7 @@ def pagina_compras():
                 st.error(str(e))
 
 # ============================================================
-# PÁGINA: GASTOS
+# GASTOS
 # ============================================================
 def pagina_gastos():
     st.title("💸 Gastos")
@@ -619,24 +615,27 @@ def pagina_gastos():
         "Impuestos", "Mantenimiento", "Seguros", "Papelería", "Otros"
     ])
     descripcion = st.text_input("Descripción")
-    monto = st.number_input("Monto", min_value=0.01, value=0.0, step=1.0)
+    monto = st.number_input("Monto", min_value=0.0, value=0.0, step=1.0)
     metodo = st.selectbox("Forma de pago", ["Efectivo", "Transferencia", "Tarjeta"])
 
     if st.button("Guardar gasto"):
-        try:
-            with db() as conn:
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO gastos (fecha, categoria, descripcion, monto, metodo)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (fecha, categoria, to_str(descripcion), monto, metodo))
-            st.success("Gasto guardado")
-            st.rerun()
-        except Exception as e:
-            st.error(str(e))
+        if monto <= 0:
+            st.error("El monto debe ser mayor a 0")
+        else:
+            try:
+                with db() as conn:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO gastos (fecha, categoria, descripcion, monto, metodo_pago)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (fecha, categoria, to_str(descripcion), monto, metodo))
+                st.success("Gasto guardado")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
 # ============================================================
-# PÁGINA: REPORTES
+# REPORTES
 # ============================================================
 def pagina_reportes():
     st.title("📈 Reportes")
@@ -654,8 +653,8 @@ def pagina_reportes():
         (fi, ff)
     )
     cogs = calcular("""
-        SELECT COALESCE(SUM(vi.cantidad * vi.costo),0) AS v
-        FROM venta_items vi JOIN ventas v ON vi.venta_id = v.id
+        SELECT COALESCE(SUM(vd.cantidad * vd.costo_unitario),0) AS v
+        FROM venta_detalle vd JOIN ventas v ON vd.venta_id = v.id
         WHERE DATE(v.fecha) BETWEEN %s AND %s AND v.anulada = 0
     """, (fi, ff))
     gastos = calcular(
@@ -668,7 +667,7 @@ def pagina_reportes():
     b.metric("Utilidad Neta", money(ingresos - cogs - gastos))
 
 # ============================================================
-# PÁGINA: HISTORIAL + ANULAR
+# HISTORIAL + ANULAR
 # ============================================================
 def pagina_historial():
     st.title("📜 Historial")
@@ -678,7 +677,7 @@ def pagina_historial():
     with db() as conn:
         with t1:
             df = pd.read_sql_query(
-                "SELECT id, fecha, cliente, total, descuento, metodo FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
+                "SELECT id, fecha, cliente, total, descuento, metodo_pago FROM ventas WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
                 conn
             )
             if df.empty:
@@ -688,7 +687,7 @@ def pagina_historial():
 
         with t2:
             df = pd.read_sql_query(
-                "SELECT id, fecha, proveedor, total, metodo FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
+                "SELECT id, fecha, proveedor, total, metodo_pago FROM compras WHERE anulada = 0 ORDER BY fecha DESC LIMIT 40",
                 conn
             )
             if df.empty:
@@ -706,7 +705,6 @@ def pagina_historial():
             else:
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # Anular venta
     with t4:
         st.info("Al anular una venta se devuelve el stock.")
         with db() as conn:
@@ -727,22 +725,21 @@ def pagina_historial():
                     try:
                         with db() as conn:
                             cur = conn.cursor()
-                            cur.execute("SELECT producto_id, cantidad, costo FROM venta_items WHERE venta_id = %s", (venta_id,))
+                            cur.execute("SELECT producto_id, cantidad, costo_unitario FROM venta_detalle WHERE venta_id = %s", (venta_id,))
                             items = cur.fetchall()
                             cur.execute("UPDATE ventas SET anulada = 1 WHERE id = %s", (venta_id,))
                             for it in items:
                                 cur.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", (it["cantidad"], it["producto_id"]))
                                 cur.execute("""
-                                    INSERT INTO movimientos
-                                    (producto_id, tipo, cantidad, costo, motivo, referencia)
+                                    INSERT INTO movimientos_stock
+                                    (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                                     VALUES (%s, 'entrada', %s, %s, 'Anulación venta', %s)
-                                """, (it["producto_id"], it["cantidad"], it["costo"], f"Anul Venta #{venta_id}"))
+                                """, (it["producto_id"], it["cantidad"], it["costo_unitario"], f"Anul Venta #{venta_id}"))
                         st.success("Venta anulada y stock devuelto")
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
 
-    # Anular compra
     with t5:
         st.info("Al anular una compra se descuenta el stock.")
         with db() as conn:
@@ -763,7 +760,7 @@ def pagina_historial():
                     try:
                         with db() as conn:
                             cur = conn.cursor()
-                            cur.execute("SELECT producto_id, cantidad, costo FROM compra_items WHERE compra_id = %s", (compra_id,))
+                            cur.execute("SELECT producto_id, cantidad, costo_unitario FROM compra_detalle WHERE compra_id = %s", (compra_id,))
                             items = cur.fetchall()
 
                             for it in items:
@@ -777,10 +774,10 @@ def pagina_historial():
                             for it in items:
                                 cur.execute("UPDATE productos SET stock = stock - %s WHERE id = %s", (it["cantidad"], it["producto_id"]))
                                 cur.execute("""
-                                    INSERT INTO movimientos
-                                    (producto_id, tipo, cantidad, costo, motivo, referencia)
+                                    INSERT INTO movimientos_stock
+                                    (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
                                     VALUES (%s, 'salida', %s, %s, 'Anulación compra', %s)
-                                """, (it["producto_id"], it["cantidad"], it["costo"], f"Anul Compra #{compra_id}"))
+                                """, (it["producto_id"], it["cantidad"], it["costo_unitario"], f"Anul Compra #{compra_id}"))
                         st.success("Compra anulada y stock actualizado")
                         st.rerun()
                     except Exception as e:

@@ -103,7 +103,6 @@ def db():
 def init_tables():
     with db() as conn:
         cur = conn.cursor()
-        # Usamos los nombres de columnas que YA existen en tu base
         cur.execute("""
             CREATE TABLE IF NOT EXISTS productos (
                 id SERIAL PRIMARY KEY,
@@ -715,21 +714,30 @@ def pagina_historial():
         if ventas.empty:
             st.warning("No hay ventas para anular")
         else:
+            opciones_ventas = [int(x) for x in ventas["id"].tolist()]
             venta_id = st.selectbox(
                 "Venta",
-                options=ventas["id"].tolist(),
-                format_func=lambda x: f"#{x} — {money(ventas.loc[ventas['id']==x, 'total'].values[0])}"
+                options=opciones_ventas,
+                format_func=lambda x: f"#{x} — {money(float(ventas.loc[ventas['id']==x, 'total'].values[0]))}"
             )
+            venta_id = to_int(venta_id)
+            
             if st.checkbox("Confirmo anular esta venta"):
                 if st.button("Anular Venta", type="primary"):
                     try:
                         with db() as conn:
                             cur = conn.cursor()
-                            cur.execute("SELECT producto_id, cantidad, costo_unitario FROM venta_detalle WHERE venta_id = %s", (venta_id,))
+                            cur.execute(
+                                "SELECT producto_id, cantidad, costo_unitario FROM venta_detalle WHERE venta_id = %s",
+                                (venta_id,)
+                            )
                             items = cur.fetchall()
                             cur.execute("UPDATE ventas SET anulada = 1 WHERE id = %s", (venta_id,))
                             for it in items:
-                                cur.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", (it["cantidad"], it["producto_id"]))
+                                cur.execute(
+                                    "UPDATE productos SET stock = stock + %s WHERE id = %s",
+                                    (it["cantidad"], it["producto_id"])
+                                )
                                 cur.execute("""
                                     INSERT INTO movimientos_stock
                                     (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
@@ -750,17 +758,23 @@ def pagina_historial():
         if compras.empty:
             st.warning("No hay compras para anular")
         else:
+            opciones_compras = [int(x) for x in compras["id"].tolist()]
             compra_id = st.selectbox(
                 "Compra",
-                options=compras["id"].tolist(),
-                format_func=lambda x: f"#{x} — {money(compras.loc[compras['id']==x, 'total'].values[0])}"
+                options=opciones_compras,
+                format_func=lambda x: f"#{x} — {money(float(compras.loc[compras['id']==x, 'total'].values[0]))}"
             )
+            compra_id = to_int(compra_id)
+            
             if st.checkbox("Confirmo anular esta compra"):
                 if st.button("Anular Compra", type="primary"):
                     try:
                         with db() as conn:
                             cur = conn.cursor()
-                            cur.execute("SELECT producto_id, cantidad, costo_unitario FROM compra_detalle WHERE compra_id = %s", (compra_id,))
+                            cur.execute(
+                                "SELECT producto_id, cantidad, costo_unitario FROM compra_detalle WHERE compra_id = %s",
+                                (compra_id,)
+                            )
                             items = cur.fetchall()
 
                             for it in items:
@@ -772,7 +786,10 @@ def pagina_historial():
 
                             cur.execute("UPDATE compras SET anulada = 1 WHERE id = %s", (compra_id,))
                             for it in items:
-                                cur.execute("UPDATE productos SET stock = stock - %s WHERE id = %s", (it["cantidad"], it["producto_id"]))
+                                cur.execute(
+                                    "UPDATE productos SET stock = stock - %s WHERE id = %s",
+                                    (it["cantidad"], it["producto_id"])
+                                )
                                 cur.execute("""
                                     INSERT INTO movimientos_stock
                                     (producto_id, tipo, cantidad, costo_unitario, motivo, referencia)
